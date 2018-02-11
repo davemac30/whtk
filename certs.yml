@@ -1,0 +1,160 @@
+---
+- hosts: localhost
+  gather_facts: no
+  become: no
+  connection: local
+
+  vars:
+    vault_url: http://127.0.0.1:8200/v1
+    vault_root_token: cc395259-3cd0-2aeb-5c1b-cef7f5262589
+    vault_api_headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    pki_backend: k8s_ca
+    tls_dir: .
+
+  tasks:
+
+  - name: vault container
+    docker_container:
+      name: vault
+      image: vault
+      published_ports: 8200:8200
+      command:
+      - server
+      - -dev
+      - -dev-root-token-id="{{ vault_root_token }}"
+
+  - name: list mounted backends
+    uri:
+      url: "{{ vault_url }}/sys/mounts"
+      method: GET
+      headers: "{{ vault_api_headers }}"
+    register: get_result
+
+  - name: mount pki backend
+    uri:
+      url: "{{ vault_url }}/sys/mounts/{{ pki_backend }}"
+      method: POST
+      headers: "{{ vault_api_headers }}"
+      body:
+        type: pki
+        config:
+          max_lease_ttl: "{{ 20 * 365 * 24 }}h"
+      body_format: json
+      status_code: 204
+    register: result
+    changed_when: result.status == 204
+    when: (pki_backend ~ '/') not in (get_result.json | json_query('keys(@)'))
+
+  - name: get ca root cert
+    uri:
+      url: "{{ vault_url }}/{{ pki_backend }}/ca/pem"
+      method: GET
+      headers: "{{ vault_api_headers }}"
+      return_content: yes
+      status_code: 200
+    register: get_result
+    failed_when: false
+    
+  - name: generate root ca
+    uri:
+      url: "{{ vault_url }}/{{ pki_backend }}/root/generate/internal"
+      method: POST
+      headers: "{{ vault_api_headers }}"
+      body:
+        common_name: k8s_ca
+        ttl: "{{ 10 * 365 * 24 }}h"
+        format: pem
+      body_format: json
+      return_content: yes
+    register: result
+    when: get_result.status != 200
+
+  - name: get ca root cert
+    uri:
+      url: "{{ vault_url }}/{{ pki_backend }}/ca/pem"
+      method: GET
+      headers: "{{ vault_api_headers }}"
+      return_content: yes
+      status_code: 200
+    register: get_result
+   
+  - name: write ca file
+    copy:
+      content: "{{ get_result.content }}"
+      dest: "{{ tls_dir }}/ca.crt"
+
+  - name: create system:master client cert signing role
+    uri:
+      url: "{{ vault_url }}/{{ pki_backend }}/roles/system_master_client_signer"
+      method: POST
+      headers: "{{ vault_api_headers }}"
+      body:
+        server_flag: false
+        client_flag: true
+        organization: system:masters
+        allow_any_name: true
+      body_format: json
+      status_code: 204
+
+  - name: create system:node client cert signing role
+    uri:
+      url: "{{ vault_url }}/{{ pki_backend }}/roles/system_node_client_signer"
+      method: POST
+      headers: "{{ vault_api_headers }}"
+      body:
+        server_flag: false
+        client_flag: true
+        organization: system:nodes
+        allow_any_name: true
+      body_format: json
+      status_code: 204
+
+  - name: create system:node client cert signing role
+    uri:
+      url: "{{ vault_url }}/{{ pki_backend }}/roles/system_node_proxier_client_signer"
+      method: POST
+      headers: "{{ vault_api_headers }}"
+      body:
+        server_flag: false
+        client_flag: true
+        organization: system:node-proxier
+        allow_any_name: true
+      body_format: json
+      status_code: 204
+
+  - name: create server cert signing role
+    uri:
+      url: "{{ vault_url }}/{{ pki_backend }}/roles/server_signer"
+      method: POST
+      headers: "{{ vault_api_headers }}"
+      body:
+        server_flag: true
+        client_flag: false
+        allow_any_name: true
+      body_format: json
+      status_code: 204
+
+  - name: generate admin client cert
+    uri:
+      url: "{{ vault_url }}/{{ pki_backend }}/issue/system_master_client_signer"
+      method: POST
+      headers: "{{ vault_api_headers }}"
+      body:
+        common_name: admin
+        format: pem
+      body_format: json
+      status_code: 200
+      return_content: yes
+    register: result
+  
+  - name: write admin private key
+    copy:
+      content: "{{ result.json.data.private_key }}"
+      dest: "{{ tls_dir }}/admin.key"
+
+  - name: write admin cert
+    copy:
+      content: "{{ result.json.data.certificate }}"
+      dest: "{{ tls_dir }}/admin.crt"
+

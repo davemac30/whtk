@@ -1,0 +1,87 @@
+---
+- hosts: kube_masters
+  gather_facts: no
+  become: yes
+
+  tasks:
+  - name: install etcd
+    yum:
+      name: etcd
+      state: installed
+  
+  - name: start and enabled etcd
+    service:
+      name: etcd.service
+      state: started
+      enabled: yes
+
+  - name: download control plane components
+    get_url:
+      url: https://storage.googleapis.com/kubernetes-release/release/v{{ kube_version }}/bin/linux/amd64/{{ item }}
+      dest: /usr/local/bin/{{ item }}
+      mode: '0755'
+    with_items:
+    - kube-apiserver
+    - kube-controller-manager
+    - kube-scheduler
+    - kubectl
+
+  - name: create kube-apiserver systemd unit file
+    copy:
+      dest: /etc/systemd/system/kube-apiserver.service
+      content: |
+        [Unit]
+        Description=Kubernetes API Server
+        Documentation=https://github.com/kubernetes/kubernetes
+
+        [Service]
+        ExecStart=/usr/local/bin/kube-apiserver \
+          --admission-control=AlwaysAdmit \
+          --advertise-address=10.130.63.10 \
+          --allow-privileged=true \
+          --apiserver-count=1 \
+          --audit-log-maxage=30 \
+          --audit-log-maxbackup=3 \
+          --audit-log-maxsize=100 \
+          --audit-log-path=/var/log/audit.log \
+          --authorization-mode=Node,RBAC \
+          --bind-address=0.0.0.0 \
+          --etcd-servers=http://127.0.0.1:2379 \
+          --event-ttl=1h \
+          --insecure-bind-address=0.0.0.0 \
+          --runtime-config=api/all \
+          --service-cluster-ip-range=10.32.0.0/24 \
+          --service-node-port-range=30000-32767 \
+          --v=2
+        Restart=on-failure
+        RestartSec=5
+
+        [Install]
+        WantedBy=multi-user.target
+    notify:
+    - systemctl daemon-reload
+    - restart kube-apiserver
+
+  - name: create kube-controller-manager systemd unit file
+    copy:
+      dest: /etc/systemd/system/kube-controller-manager.service
+      content: |
+controller-manager
+
+  - name: flush handlers
+    meta: flush_handlers
+
+  - name: start and enable kube-apiserver
+    service:
+      name: kube-apiserver.service
+      state: started
+      enabled: yes
+
+  handlers:
+  - name: systemctl daemon-reload
+    command: systemctl daemon-reload
+
+  - name: restart kube-apiserver
+    service:
+      name: kube-apiserver.service
+      state: restarted

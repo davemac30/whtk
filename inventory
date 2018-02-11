@@ -1,0 +1,13 @@
+mstr
+node0
+node1
+
+[kube_masters]
+mstr
+
+[kube_nodes]
+node0
+node1
+
+[all:vars]
+kube_version = 1.9.3
