@@ -10,7 +10,7 @@
     vault_api_headers:
       X-Vault-Token: "{{ vault_root_token }}"
     pki_backend: k8s_ca
-    tls_dir: .
+    tls_dir: ./tls
 
   tasks:
 

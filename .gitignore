@@ -1,3 +1,4 @@
-tls
+*.crt
+*.key
 .vagrant
 ssh-config
